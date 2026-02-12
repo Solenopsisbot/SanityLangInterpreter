@@ -1,0 +1,26 @@
+// fate.san — Foreshadow, fulfill, and gamble with destiny
+// Run: uv run sanity examples/fate.san
+
+// Foreshadow some events
+foreshadow victory.
+foreshadow defeat.
+
+// Set up some variables
+sure hero = "Brave Knight".
+sure dragon = "Ancient Wyrm".
+sure legendary_sword = "Excalibur".
+
+// The hero's journey
+print(hero).
+print("wields").
+print(legendary_sword).
+
+// A fateful encounter
+sure strength = 1.
+bet(strength == 1) reward 50 risk 30 {
+    print("The hero strikes true!").
+    fulfill victory.
+}
+
+// Check what was fulfilled
+therapy.

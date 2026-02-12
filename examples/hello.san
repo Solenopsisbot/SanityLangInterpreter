@@ -1,0 +1,36 @@
+// Basic (In)SanityLang example
+// Tests core features: declarations, print, functions, control flow
+
+sure greeting = "Hello, SanityLang!".
+print(greeting).
+
+maybe counter = 0.
+maybe counter = 1.
+maybe counter = 2.
+
+sure x = 10.
+sure y = 20.
+sure result = x + y.
+print(result).
+
+// Function test
+does add(a, b) {
+    give a + b.
+}
+
+sure sum = add(3, 4).
+print(sum).
+
+// If test
+if result == 30 {
+    print("Math works!").
+} actually {
+    print("Math is broken.").
+}
+
+// Pls loop
+pls 3 as idx {
+    print(idx).
+}
+
+print("Done!").

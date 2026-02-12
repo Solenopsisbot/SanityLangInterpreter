@@ -1,0 +1,16 @@
+// fibonacci.san — Recursive Fibonacci with memoization
+// Run: uv run sanity --audit examples/fibonacci.san
+
+// Memoized fibonacci — `did` caches results
+did fib(n) {
+    if n <= 1 { return n. }
+    return fib(n - 1) + fib(n - 2).
+}
+
+// Compute the first 10 fibonacci numbers
+pls 10 as i {
+    print(fib(i)).
+}
+
+// How's our sanity holding up after all that recursion?
+therapy.

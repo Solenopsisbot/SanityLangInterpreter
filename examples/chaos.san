@@ -1,0 +1,26 @@
+// chaos.san — Embrace the void
+// Run: uv run sanity --chaos examples/chaos.san
+// This starts in Insanity Mode (SP = 0)!
+
+// Even in chaos, we can declare things
+sure hope = "still here".
+maybe sanity_level = 404.
+
+// Print from the void
+print(hope).
+print(sanity_level).
+
+// Try to recover
+i am okay.
+
+// We should be at SP 50 now
+print("recovered?").
+therapy.
+
+// A bet for good measure — condition must be true to win
+sure lucky = 1.
+bet(lucky == 1) reward 30 risk 20 {
+    print("won the gamble!").
+}
+
+print("survived chaos mode!").
