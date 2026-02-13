@@ -37,7 +37,7 @@ SanityLang is an esoteric language with a **Sanity Points (SP)** system. Every a
 
 ```bash
 # Clone the repo
-git clone https://github.com/YOUR_USERNAME/SanityLangInterpreter.git
+git clone https://github.com/Solenopsisbot/SanityLangInterpreter.git
 cd SanityLangInterpreter
 
 # Install dependencies
