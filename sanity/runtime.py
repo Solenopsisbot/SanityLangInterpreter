@@ -46,9 +46,11 @@ class ReturnSignal(Exception):
 class Interpreter:
     """The main (In)SanityLang interpreter."""
 
-    def __init__(self, source_path: str = "<repl>", flags: dict | None = None):
+    def __init__(self, source_path: str = "<repl>", flags: dict | None = None,
+                 program_args: list[str] | None = None):
         self.source_path = source_path
         self.flags = flags or {}
+        self.program_args = program_args or []
 
         # Sanity Points
         self.sp = SanityTracker(
@@ -167,6 +169,14 @@ class Interpreter:
         # Track function names whose most recent call was their first call (for excited mood)
         self._first_call_results: set[str] = set()
 
+        # File handles for filesystem IO
+        self.file_handles: dict[str, object] = {}  # handle_name -> SanFileHandle
+
+        # IO terminator state
+        self._print_cache: set[str] = set()     # For '..' — cached strings never re-printed
+        self._last_print: str = ""               # For '~' — previous print content
+        self._write_cache: set[str] = set()      # For '..' — cached writes (content hashes)
+
     # ================================================
     # Main execution
     # ================================================
@@ -183,6 +193,9 @@ class Interpreter:
     def execute_program(self, program: Program) -> SanValue:
         """Execute a parsed Program."""
         self.sp.is_runtime = True
+
+        # Populate built-in args and flags (§29)
+        self._populate_args_and_flags()
 
         # Register chapters
         for ch in program.chapters:
@@ -243,6 +256,21 @@ class Interpreter:
         for name, (decl, env) in self.functions.items():
             if decl.keyword == "should" and self.call_counts.get(name, 0) == 0:
                 self.sp.should_not_called()
+
+        # Penalize unclosed file handles (-5 SP each)
+        unclosed = list(self.file_handles.keys())
+        if unclosed:
+            for hname in unclosed:
+                fh = self.file_handles[hname]
+                if hasattr(fh, 'close'):
+                    fh.close()
+                self.sp.file_unclosed_penalty()
+            if len(unclosed) >= 3:
+                self.output.append(
+                    "[SanityLang] You're leaking file handles. "
+                    "This is going on your permanent record."
+                )
+            self.file_handles.clear()
 
         return result
 
@@ -422,6 +450,23 @@ class Interpreter:
         if isinstance(node, VibeBlock):
             # Simplified: run body synchronously (no real concurrency)
             return self._exec_block(node.body)
+        # Console IO
+        if isinstance(node, ShoutStatement):
+            return self._exec_shout(node)
+        if isinstance(node, WhisperStatement):
+            return self._exec_whisper_stmt(node)
+        # Filesystem IO
+        if isinstance(node, OpenStatement):
+            return self._exec_open(node)
+        if isinstance(node, WriteStatement):
+            return self._exec_write(node)
+        if isinstance(node, AppendStatement):
+            return self._exec_append(node)
+        if isinstance(node, CloseStatement):
+            return self._exec_close(node)
+        # Call management
+        if isinstance(node, ForgetCallsStatement):
+            return self._exec_forget_calls(node)
         return san_void()
 
     # ================================================
@@ -488,6 +533,17 @@ class Interpreter:
             return self._eval_graph(node)
         if isinstance(node, SanityAccess):
             return self._eval_sanity(node)
+        # Console IO expressions
+        if isinstance(node, AskExpr):
+            return self._eval_ask(node)
+        if isinstance(node, ListenExpr):
+            return self._eval_listen(node)
+        # Filesystem IO expressions
+        if isinstance(node, ReadExpr):
+            return self._eval_read(node)
+        # Graphics expressions
+        if isinstance(node, CanvasExpr):
+            return self._eval_canvas(node)
         return san_void()
 
     def _eval_var_access(self, node: VariableAccess) -> SanValue:
@@ -1091,6 +1147,154 @@ class Interpreter:
         if node.method == "curses":
             return san_list([])  # Simplified
         return san_void()
+
+    # ================================================
+    # Console IO expression evaluators
+    # ================================================
+
+    def _eval_ask(self, node: AskExpr) -> SanValue:
+        """Evaluate ask("prompt") — read a line from stdin, return as word."""
+        # SP cost: -1
+        self.sp.change(-1, "ask()")
+
+        # Check --no-input flag
+        if self.flags.get("no_input"):
+            return san_word("")
+
+        prompt_val = self.evaluate(node.prompt)
+        prompt_str = str(prompt_val)
+        try:
+            result = input(prompt_str)
+        except EOFError:
+            result = ""
+
+        # Simple sentiment analysis for mood assignment
+        positive_words = {"yes", "yeah", "yep", "sure", "ok", "good", "great", "love", "happy"}
+        negative_words = {"no", "nope", "nah", "bad", "hate", "sad", "angry", "worst"}
+        words = set(result.lower().split())
+        if words & positive_words:
+            mood = Mood.HAPPY
+        elif words & negative_words:
+            mood = Mood.SAD
+        else:
+            mood = Mood.NEUTRAL
+
+        # The result gets TAINTED trait (untrusted input)
+        # This is tracked at the variable level when assigned
+        # Store mood info on the interpreter for the next assignment
+        self._last_input_mood = mood
+
+        return san_word(result)
+
+    def _eval_listen(self, node: ListenExpr) -> SanValue:
+        """Evaluate listen() — read all stdin until EOF."""
+        import sys
+
+        # SP cost: -2
+        self.sp.change(-2, "listen()")
+
+        # Check --no-input flag
+        if self.flags.get("no_input"):
+            return san_word("")
+
+        try:
+            lines = sys.stdin.read()
+        except Exception:
+            lines = ""
+
+        self._last_input_mood = Mood.OVERWHELMED  # Bulk input is overwhelming
+        return san_word(lines)
+
+    # ================================================
+    # Filesystem IO expression evaluators
+    # ================================================
+
+    def _eval_read(self, node: ReadExpr) -> SanValue:
+        """Evaluate read handle — read file contents."""
+        from .filehandle import SanFileHandle
+
+        handle_name = node.handle_name
+        fh = self.file_handles.get(handle_name)
+        if fh is None or not isinstance(fh, SanFileHandle):
+            raise SanityError(f"No open file handle '{handle_name}'")
+        if not fh.is_open:
+            raise SanityError(f"File handle '{handle_name}' is closed")
+
+        # SP cost scales with file size
+        cost = fh.sp_cost_for_size(base_cost=3)
+        self.sp._audit(f"read {handle_name}")
+        self.sp.sp += self.sp._modifier(-cost)
+
+        # Read terminator effects
+        terms = getattr(node, 'terminators', [])
+
+        # '..' cached — return cached content without hitting disk again
+        cache_key = f"read:{handle_name}"
+        if '..' in terms and cache_key in self.cached_returns:
+            return self.cached_returns[cache_key]
+
+        try:
+            content = fh.read()
+        except Exception as e:
+            raise SanityError(f"Failed to read '{handle_name}': {e}")
+
+        result = san_word(content)
+
+        # '..' cache the result
+        if '..' in terms:
+            self.cached_returns[cache_key] = result
+
+        # '?' debug — log handle state
+        if '?' in terms:
+            debug_msg = f"[read debug] {handle_name}: Mood={fh.mood.name}, Trust={fh.trust}, SP={fh.sp}"
+            self.output.append(debug_msg)
+            print(debug_msg)
+
+        # Mark handle as Observed
+        fh.observed = True
+
+        return result
+
+    # ================================================
+    # Graphics expression evaluators
+    # ================================================
+
+    def _eval_canvas(self, node: CanvasExpr) -> SanValue:
+        """Evaluate canvas("title", w, h) — create a canvas.
+
+        Creates a SanCanvas (headless by default). The canvas is stored
+        in self.canvases and returned as a Blob with canvas metadata.
+        """
+        from .canvas import SanCanvas
+
+        title = str(self.evaluate(node.title))
+        width_val = self.evaluate(node.width)
+        height_val = self.evaluate(node.height)
+        width = int(str(width_val)) if width_val else 800
+        height = int(str(height_val)) if height_val else 600
+
+        # SP cost: -3 for canvas creation
+        self.sp.canvas_create()
+
+        headless = self.flags.get("headless", True)  # Default headless
+        canvas = SanCanvas(title, width, height, headless=headless)
+
+        # Store canvas reference
+        if not hasattr(self, 'canvases'):
+            self.canvases: dict[str, SanCanvas] = {}
+        self.canvases[title] = canvas
+
+        if not headless:
+            msg = f"[Canvas '{title}' ({width}x{height}) — use --headless for non-graphical mode]"
+            self.output.append(msg)
+            print(msg)
+
+        # Return a blob with canvas info
+        return san_blob({
+            "title": san_word(title),
+            "width": san_word(str(width)),
+            "height": san_word(str(height)),
+        })
 
     def _call_method(self, obj: SanValue, method: str, args: list[SanValue]) -> SanValue:
         """Call a method on a SanValue object."""

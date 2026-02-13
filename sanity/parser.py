@@ -284,6 +284,29 @@ class Parser:
         if tok.type == TokenType.DELETE:
             return self.parse_delete()
 
+        # Console IO — shout
+        if tok.type == TokenType.SHOUT:
+            return self.parse_shout()
+
+        # Whisper as statement: whisper(expr)
+        # Note: WHISPER is also a declaration keyword. We check if followed by '('
+        # to distinguish whisper(expr). from whisper x = val.
+        # The declaration case is already handled above.
+
+        # Filesystem IO
+        if tok.type == TokenType.OPEN:
+            return self.parse_open()
+        if tok.type == TokenType.WRITE_KW:
+            return self.parse_write()
+        if tok.type == TokenType.APPEND_KW:
+            return self.parse_append()
+        if tok.type == TokenType.CLOSE:
+            return self.parse_close()
+
+        # Call management
+        if tok.type == TokenType.FORGET:
+            return self.parse_forget_calls()
+
         # Identifier — could be assignment, emotional op, or expression
         if tok.type == TokenType.IDENTIFIER:
             return self.parse_identifier_statement()
@@ -1020,6 +1043,67 @@ class Parser:
         return DeleteStatement(line=tok.line, column=tok.column, terminators=terminators, variable=name)
 
     # ================================================
+    # Console IO
+    # ================================================
+
+    def parse_shout(self) -> ShoutStatement:
+        tok = self.advance()  # shout
+        self.expect(TokenType.LPAREN)
+        expr = self.parse_expression()
+        self.expect(TokenType.RPAREN)
+        terminators = self.parse_terminators()
+        return ShoutStatement(line=tok.line, column=tok.column, terminators=terminators, expression=expr)
+
+    # ================================================
+    # Filesystem IO
+    # ================================================
+
+    def parse_open(self) -> OpenStatement:
+        tok = self.advance()  # open
+        path_expr = self.parse_expression()
+        self.expect(TokenType.AS, "Expected 'as' after file path")
+        name = self.expect(TokenType.IDENTIFIER, "Expected file handle name").value
+        terminators = self.parse_terminators()
+        return OpenStatement(line=tok.line, column=tok.column, terminators=terminators,
+                             path=path_expr, handle_name=name)
+
+    def parse_write(self) -> WriteStatement:
+        tok = self.advance()  # write
+        content = self.parse_expression()
+        self.expect(TokenType.TO, "Expected 'to' after write content")
+        name = self.expect(TokenType.IDENTIFIER, "Expected file handle name").value
+        terminators = self.parse_terminators()
+        return WriteStatement(line=tok.line, column=tok.column, terminators=terminators,
+                              content=content, handle_name=name)
+
+    def parse_append(self) -> AppendStatement:
+        tok = self.advance()  # append
+        content = self.parse_expression()
+        self.expect(TokenType.TO, "Expected 'to' after append content")
+        name = self.expect(TokenType.IDENTIFIER, "Expected file handle name").value
+        terminators = self.parse_terminators()
+        return AppendStatement(line=tok.line, column=tok.column, terminators=terminators,
+                               content=content, handle_name=name)
+
+    def parse_close(self) -> CloseStatement:
+        tok = self.advance()  # close
+        name = self.expect(TokenType.IDENTIFIER, "Expected file handle name").value
+        terminators = self.parse_terminators()
+        return CloseStatement(line=tok.line, column=tok.column, terminators=terminators, handle_name=name)
+
+    # ================================================
+    # Call Management
+    # ================================================
+
+    def parse_forget_calls(self) -> ForgetCallsStatement:
+        tok = self.advance()  # forget
+        self.expect(TokenType.CALLS, "Expected 'calls' after 'forget'")
+        self.expect(TokenType.ON, "Expected 'on' after 'forget calls'")
+        name = self.expect(TokenType.IDENTIFIER, "Expected function name").value
+        terminators = self.parse_terminators()
+        return ForgetCallsStatement(line=tok.line, column=tok.column, terminators=terminators, function_name=name)
+
+    # ================================================
     # Identifier Statements (assignment, emotional ops, expr)
     # ================================================
 
@@ -1344,6 +1428,39 @@ class Parser:
                     break
             self.expect(TokenType.RPAREN)
             return SanityAccess(line=tok.line, column=tok.column, method=method, arguments=args)
+
+        # Ask — read stdin line
+        if tok.type == TokenType.ASK:
+            self.advance()
+            self.expect(TokenType.LPAREN)
+            prompt = self.parse_expression()
+            self.expect(TokenType.RPAREN)
+            return AskExpr(line=tok.line, column=tok.column, prompt=prompt)
+
+        # Listen — read all stdin
+        if tok.type == TokenType.LISTEN:
+            self.advance()
+            self.expect(TokenType.LPAREN)
+            self.expect(TokenType.RPAREN)
+            return ListenExpr(line=tok.line, column=tok.column)
+
+        # Read — read file handle
+        if tok.type == TokenType.READ_KW:
+            self.advance()
+            name = self.expect(TokenType.IDENTIFIER, "Expected file handle name").value
+            return ReadExpr(line=tok.line, column=tok.column, handle_name=name)
+
+        # Canvas — create a canvas
+        if tok.type == TokenType.CANVAS:
+            self.advance()
+            self.expect(TokenType.LPAREN)
+            title = self.parse_expression()
+            self.expect(TokenType.COMMA)
+            width = self.parse_expression()
+            self.expect(TokenType.COMMA)
+            height = self.parse_expression()
+            self.expect(TokenType.RPAREN)
+            return CanvasExpr(line=tok.line, column=tok.column, title=title, width=width, height=height)
 
         # Mood lock declaration: mood("name")
         if tok.type == TokenType.MOOD:

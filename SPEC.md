@@ -56,6 +56,13 @@ SP changes from actions:
 | Declaring a `curse` | -20 |
 | An Emotional Bond forming (see §3) | +2 |
 | An Emotional Bond breaking | -7 |
+| Unclosed file handle at scope exit (see §30) | -5 per handle |
+| Processing untrusted input without checking Trust (see §28) | -3 |
+| Canvas SP reaching 0 (see §31) | -10 to program SP |
+| Writing to a file with Angry handle (see §30) | -5 (silent failure) |
+| Using `shout` (see §28) | -2 (aggression tax) |
+| Reading a file (see §30) | -0.5 per MB (resource strain, rounded up) |
+| Drawing during Visual Insanity Mode (see §31) | -1 per draw call |
 
 SP is checked at compile time AND at runtime. Some things that cost SP at compile time cost double at runtime (specifically: `whatever` declarations, Trust reaching 0, and `curse` declarations).
 
@@ -480,6 +487,9 @@ Traits are passive modifiers that attach to variables (and Personalities—see �
 | Cursed | Variable is affected by a `curse`. |
 | Blessed | Variable was `exorcise`d from a curse. |
 | Volatile | Variable is declared with `scream`. |
+| Attentive | Variable was created by `listen` (see §28). |
+| Tainted | Variable was assigned from `args` or `ask` input (see §28, §29). |
+| Creative | Variable is associated with canvas operations (see §31). |
 
 ### Trait Effects
 
@@ -496,6 +506,9 @@ Traits are passive modifiers that attach to variables (and Personalities—see �
 | Cursed | See §13. Cursor operations have ±curse_value% variation. |
 | Blessed | Immune to curses. +1 SP per 100 statements. |
 | Volatile | Every mutation fires an Event (see §18). Makes the variable visible across scopes. |
+| Attentive | Resists Mood changes from Emotional Bonds (stays focused). Trust decay halved. |
+| Tainted | Trust capped at 70 until explicitly `cleanse`d via Zen module. Cannot gain Lucky Trait. |
+| Creative | +1 SP per 50 statements (creative bonus). Immune to Lonely Trait effects. |
 
 ### Trait Interactions
 
@@ -505,6 +518,10 @@ Traits are passive modifiers that attach to variables (and Personalities—see �
 - **Lonely + Volatile**: Contradiction. Variable becomes Erratic: value randomly shifts by ±1 each access.
 - **Resilient + Cursed**: Curse effect is halved.
 - **Blessed + Cursed**: Impossible. Blessed removes Cursed.
+- **Tainted + Paranoid**: Both remain. Variable rejects all bonds AND has capped Trust. Essentially quarantined.
+- **Creative + Tired**: Creative wins. The variable is "inspired through exhaustion" — Tired effects are suppressed.
+- **Attentive + Lonely**: Attentive prevents Mood from tending Sad. But Lonely Trust decay still applies at half rate (Attentive halves it).
+- **Tainted + Blessed**: Tainted is removed. Blessed purifies the input.
 
 Traits propagate through Emotional Bonds. If A gains Lucky, all variables bonded with A gain Lucky after A's next operation.
 
@@ -956,6 +973,456 @@ pray for nothing.    // No effect. +1 SP for the gesture.
 | `Chaos` | `embrace`, `destabilize`, `scramble` | `embrace()` sets SP to 0 (enters Insanity Mode). `destabilize(x)` randomizes x's Mood. `scramble()` randomizes all variable names once. |
 | `Zen` | `breathe`, `meditate`, `cleanse` | `breathe()` pauses 5 seconds, +5 SP. `meditate()` sets all variable Moods to Neutral, but takes 10 seconds. `cleanse()` removes all Traits from all variables in scope, -30 SP (fresh start). |
 | `Fate` | `foreshadow`, `fulfill`, `predict`, `odds` | Higher-level versions of built-in time/gambling features. `predict(x)` uses x's history and Traits to guess future value. |
+| `IO` | `ask`, `listen`, `shout`, `whisper` | See §28. `IO.buffer()` returns all unread stdin as a List. `IO.flush()` forces all pending output. `IO.silence()` suppresses all output for N statements. |
+| `Files` | `open`, `read`, `write`, `append`, `close`, `exists`, `delete`, `list_dir` | See §30. `Files.temp()` returns a temp file handle (auto-deletes at scope end, Mood: Neutral). `Files.cwd()` returns current directory as a Word. |
+| `Canvas` | `canvas`, `pixel`, `line`, `rect`, `circle`, `text`, `sprite`, `show` | See §31. `Canvas.screenshot()` captures current window. `Canvas.fps()` returns current framerate as a Number with Lucky/Unlucky Trait effects. |
+| `Args` | `args`, `flags`, `env` | See §29. `Args.env(key)` returns environment variables (Trust 20, even lower than args). `Args.count()` returns arg count. |
+
+---
+
+## 28. Console IO
+
+SanityLang has built-in console IO. All input is considered untrusted by default.
+
+### Output
+
+`print` writes to stdout as you'd expect. But SanityLang has additional output modes:
+
+```
+print("Normal output").         // stdout, normal
+shout("LOUD OUTPUT").           // stdout, ALL CAPS forced. -2 SP.
+whisper("secret output").       // stderr. If the variable has Paranoid Trait, output is ROT13.
+```
+
+`shout` ignores any Sad Mood modifiers on the variable — it forces the text through unmodified (and uppercased). This is the only way to guarantee un-altered output.
+
+`whisper` respects all Mood modifiers. A Sad variable whispered drops its last character. An Angry variable whispered adds random caps.
+
+The terminator on print/shout/whisper matters:
+
+```
+print("hello").     // Normal. Output: hello
+print("hello")..    // Cached. This exact string will never be printed again — duplicates are silently dropped.
+print("hello")~     // Uncertain output. 15% chance of printing the PREVIOUS print's content instead.
+print("hello")!     // Forceful. Ignores ALL Trait effects on the variable.
+print("hello")?     // Debug. Also prints the variable's Mood, Trust, and Traits alongside the value.
+```
+
+### Input
+
+#### `ask`
+
+Reads a single line from stdin:
+
+```
+sure name = ask("What's your name? ").
+```
+
+Rules:
+- The returned Word has **Trust 50** (we don't fully trust user input).
+- The returned Word gains the **Tainted Trait** automatically.
+- The Word's **Mood** is set by naive sentiment analysis of the content:
+  - Input contains "!", positive words, emoji → Happy
+  - Input contains "no", "bad", negative words → Sad
+  - Input contains profanity, ALL CAPS → Angry
+  - Input is empty → Afraid
+  - Otherwise → Neutral
+- The variable receiving the `ask` result inherits the Mood.
+- If an Emotional Bond is formed between an `ask` result and another variable, the other variable also gains Tainted.
+
+Terminator effects on `ask`:
+
+```
+sure name = ask("Name? ").       // Normal.
+sure name = ask("Name? ")..      // Cached: same prompt returns same answer without re-asking.
+sure name = ask("Name? ")~       // If user doesn't respond in 5 seconds, a random Word is used.
+sure name = ask("Name? ")!       // Forceful: returned value has NO Traits (not even Tainted).
+sure name = ask("Name? ")?       // Debug: also prints what Mood the input was assigned.
+```
+
+#### `listen`
+
+Reads stdin continuously until EOF:
+
+```
+sure lines = listen().
+// lines is a List of Words. Each line is an element.
+```
+
+Rules:
+- The returned List gains the **Attentive Trait**.
+- Each line element has Trust 50 and Tainted Trait.
+- If the user takes more than 10 seconds between lines, all accumulated input so far has its Trust reduced by 5 per 10-second gap (impatience penalty).
+- If the user sends more than 100 lines, the List gains the **Overwhelmed** Mood (new — see below). Overwhelmed Lists have a 5% chance of dropping an element on each access.
+- In Insanity Mode, `listen` input characters are shuffled within each line.
+
+### New Mood: Overwhelmed
+
+| Mood | Triggered By | Effect |
+|---|---|---|
+| Overwhelmed | A List exceeding 100 elements via `listen`, or a file handle reading >10,000 lines | 5% chance of dropping an element/line per access. Numeric operations on the variable randomly skip. Overwhelmed propagates through Emotional Bonds but decays by 1 hop (bonded variables get a milder version: 2% drop chance). |
+
+---
+
+## 29. Command-Line Arguments
+
+### `args`
+
+A built-in `sure` List of Words containing all command-line arguments.
+
+```
+// $ sanityc run program.san hello world --verbose
+
+print(args).  // ["program.san", "hello", "world", "--verbose"]
+```
+
+Rules:
+- `args` is immutable (`sure` List).
+- The List starts with **Trust 30**.
+- Each element Word has **Doubt 3** (nearly Uncertain — two more `maybe` reassignments and it becomes permanently Uncertain).
+- Each element has the **Tainted Trait**.
+- `args[0]` is the program name. It has the **Elder Trait** (it existed before the program started). Accessing it costs 0 SP.
+- Assigning any `args` element to another variable creates an Emotional Bond between them. The receiving variable inherits the low Trust and Tainted Trait. This means the taint spreads through your codebase via bonds.
+
+### `flags`
+
+A built-in `sure` Blob that auto-parses `--key=value` and `-k value` patterns:
+
+```
+// $ sanityc run program.san --name=Hakka -v --count=42
+
+print(flags.name).   // "Hakka" (Word, Trust 30, Tainted)
+print(flags.v).      // yep (Yep, Trust 30, Tainted)
+print(flags.count).  // "42" (Word, not Number! You must coerce manually.)
+print(flags.missing).// Void (not an error)
+```
+
+Coercing a flag value to a Number adds a Scar to the variable (type coercion as usual) AND keeps the Tainted Trait.
+
+### Special Flags
+
+If the user passes these flags to the *program* (not just the compiler):
+
+| Flag | Effect |
+|---|---|
+| `--chaos` | Program starts at 50 SP instead of 100. |
+| `--help` | Program lists all `should` functions with signatures, then exits. |
+| `--mercy` | Equivalent to `pray for mercy` at program start. |
+| `--trust-me` | All `args` and `flags` values start with Trust 70 instead of 30. |
+
+### Iterating Args
+
+`args` in a `pls` loop works normally. But `args` in an `ugh` loop: the ugh quit probability starts at 5% per iteration instead of the usual 1% (args are annoying to parse and the runtime knows it).
+
+`args` in a `hopefully` loop: no SP bonus (there's nothing hopeful about argument parsing).
+
+---
+
+## 30. Filesystem IO
+
+### Opening Files
+
+```
+open "data.txt" as file.
+```
+
+File handles are **Personality instances**. They have Moods, Traits, Trust (starting at 70), their own SP (starting at 100), and participate in the Relationship Graph.
+
+The file handle's **starting Mood** depends on the file extension:
+
+| Extension | Starting Mood | Rationale |
+|---|---|---|
+| `.san` | Happy | One of us! |
+| `.txt` | Neutral | Plain and simple. |
+| `.json` | Paranoid | Strict format, easily broken. |
+| `.csv` | Sad | Nobody actually enjoys CSV. |
+| `.log` | Tired | It's seen things. |
+| `.md` | Happy | Documentation is appreciated. |
+| `.yaml` / `.yml` | Afraid | One wrong indent and it's over. |
+| `.xml` | Angry | Self-explanatory. |
+| `.env` | Paranoid | Contains secrets. Trust starts at 40 instead of 70. |
+| Unknown extension | Afraid | We don't know what you are. |
+| No extension | Dunno | Could be anything. Mood is Dunno too. |
+
+### Reading
+
+```
+sure content = read file.
+```
+
+Returns the entire file as a Word. The returned Word inherits the file handle's **Trust** and **Mood**.
+
+```
+sure lines = file.lines().
+```
+
+Returns a List of Words, one per line. List Mood depends on file size:
+- < 100 lines → Happy
+- 100-1000 lines → Neutral
+- 1000-10000 lines → Tired
+- > 10000 lines → Overwhelmed (see §28)
+
+Reading a file costs **-0.5 SP per megabyte** (rounded up). A 500KB file costs -1 SP. A 10MB file costs -5 SP. A 200MB file costs -100 SP (instant Insanity Mode from a single read). Files over 1MB also set the file handle's Mood to Tired.
+
+#### Read Terminator Effects
+
+```
+sure content = read file.     // Normal read.
+sure content = read file..    // Cached: re-reading returns the same content without hitting disk.
+sure content = read file~     // May return the file's PREVIOUS contents (from .san.dream cache).
+sure content = read file!     // Forceful: strips all Traits from the returned value.
+sure content = read file?     // Debug: also prints the file handle's Mood, Trust, and SP.
+```
+
+### Writing
+
+```
+write "hello world" to file.
+append "another line" to file.
+```
+
+Rules:
+- If the file handle is **Angry**, the write **fails silently**. Content is redirected to `.san.blame`. The handle's Trust drops by 10. -5 SP.
+- If the file handle is **Afraid**, the write works but takes 2x as long (double confirmation internal process).
+- If the file handle is **Tired**, writes have a 5% chance of being truncated (last 10% of content dropped).
+- If the file handle's Trust is < 30, writes are automatically backed up to a `.san.backup` file.
+- Writing to a file with the `~` terminator: the write is buffered but may or may not actually flush to disk (Uncertain write).
+- Writing to a file with `..`: the write is cached — writing the same content again is a no-op.
+
+### Closing
+
+```
+close file.
+```
+
+The handle goes to the Afterlife. It can be `séance`d to get a read-only handle to re-read the last known contents.
+
+**Forgetting to close a handle**: when the scope exits, unclosed handles ghost themselves automatically. Each unclosed handle costs **-5 SP**. If you have 3+ unclosed handles, the compiler warns: "You're leaking file handles. This is going on your permanent record."
+
+### File Handle Interactions
+
+- File handles opened within 3 lines of each other form **Emotional Bonds** (same as variables). If one handle becomes Angry (write error), bonded handles become Afraid.
+- File handles participate in the **Relationship Graph**. A file that is read and then its contents assigned to a variable creates an edge from handle → variable.
+- `read` makes the file handle **Observed** (see §6). An Observed file handle cannot have its Mood change silently — all Mood changes are logged.
+- A file handle with the **Cursed Trait** (from importing a cursed Chapter that opened it): read/write operations have ±curse_value% character corruption.
+
+### Path Interpolation
+
+File paths can use `{interpolation}`:
+
+```
+sure dir = "data".
+open "{dir}/output.txt" as file.
+```
+
+But: the interpolated variable must have **Trust ≥ 50**. If Trust < 50, the operation is rejected:
+
+```
+[SanityLang] Path interpolation rejected: 'dir' has Trust 35. Potential path traversal.
+```
+
+This means `args` values (Trust 30) **cannot** be used directly in file paths without Trust boosting. To boost Trust:
+
+```
+sure safePath = cleanse(args[1]).  // Removes Tainted, sets Trust to 70.
+open "{safePath}/data.txt" as file.
+```
+
+`cleanse` is from the Zen module and costs -5 SP.
+
+### Other File Operations
+
+```
+sure exists = file.exists().      // Yep or Nope. Makes the handle Observed.
+file.delete().                     // Deletes the file. Handle enters Grief Mood.
+                                   // Any variable that was read from this file gains a Scar.
+sure size = file.size().           // Returns Number (bytes).
+sure modified = file.modified().   // Returns Number (unix timestamp, with ±100ms Time jitter).
+```
+
+### Directory Operations
+
+```
+sure entries = Files.list_dir("./data").
+// Returns a List of Blobs: [{name: "file.txt", kind: "file"}, {name: "subdir", kind: "dir"}, ...]
+// The List has same Trust as the path variable used.
+// Each entry Blob has the starting Mood of its extension (as per the table above).
+```
+
+---
+
+## 31. Graphics
+
+SanityLang has a built-in immediate-mode graphics system. Because why the fuck not.
+
+### Creating a Canvas
+
+```
+sure screen = canvas("My App", 800, 600).
+```
+
+The canvas is a **Personality instance** with:
+- Its own **SP** (starts at 100, separate from program SP).
+- Its own **Mood** (starts at Happy — fresh blank canvas).
+- Its own **Trust** (starts at 100).
+- Its own **Traits** (starts with Creative).
+- Participation in the **Relationship Graph**.
+
+### Drawing Primitives
+
+```
+screen.pixel(x, y, "red").                       // Single pixel.
+screen.line(x1, y1, x2, y2, "blue").             // Line.
+screen.rect(x, y, width, height, "green").       // Filled rectangle.
+screen.rect(x, y, width, height, "green", nope). // Outline only (pass nope for fill).
+screen.circle(x, y, radius, "yellow").           // Circle.
+screen.text(x, y, "Hello!", 16).                 // Text with font size.
+```
+
+Colors can be Words (`"red"`, `"blue"`, `"#FF0000"`) or Blobs (`{r: 255, g: 0, b: 0}`).
+
+#### Drawing SP Costs
+
+Each draw operation costs the **canvas's** SP (not the program's):
+
+| Operation | Canvas SP Cost |
+|---|---|
+| `pixel` | 0 |
+| `line` | -1 |
+| `rect` | -2 |
+| `circle` | -3 |
+| `text` | -5 |
+| `sprite` (see below) | -3 |
+| `clear` | -1 |
+
+When canvas SP ≤ 0: **Visual Insanity Mode**. Effects:
+- Colors shift hue by a random amount each frame.
+- Lines gain ±3px wobble per endpoint.
+- Text renders in random sizes (±30% of specified).
+- Rectangles may have rounded corners at random radii.
+- Circles become ellipses.
+- -10 to **program** SP when canvas SP first hits 0.
+
+Canvas SP recovers +1 per `show()` call (the canvas rests between frames).
+
+#### Mood Effects on Rendering
+
+The Mood of the **variable being rendered** (not the canvas) affects how it looks:
+
+| Mood | Visual Effect |
+|---|---|
+| Happy | Subtle glow / brightness boost. |
+| Sad | 30% transparency applied. |
+| Angry | Color overridden to bold red. Text is bold. |
+| Afraid | Rendered 20% smaller than specified. |
+| Excited | Rendered with a pulsing animation (size oscillates ±5%). |
+| Tired | Rendered with reduced saturation. |
+| Overwhelmed | Rendered with visual noise/static effect. |
+| Neutral | No modification. |
+
+If the **canvas itself** is Angry (e.g., from bonded file handle errors), all rendering has a red tint overlay.
+
+If the **canvas itself** is Sad, the entire canvas has a desaturation filter.
+
+### Displaying
+
+Graphics are **double-buffered**. Nothing appears until you call `show()`:
+
+```
+screen.clear().
+screen.rect(0, 0, 800, 600, "black").
+screen.text(400, 300, "Hello World", 32).
+screen.show().   // Frame is now visible. Canvas SP +1.
+```
+
+### Input Handling
+
+```
+screen.onClick(does (x, y) {
+   print("Clicked at {x}, {y}").
+}).
+
+screen.onKey(does (key) {
+   print("Pressed: {key}").
+}).
+
+screen.onMouseMove(does (x, y) {
+   // Called every frame the mouse moves.
+}).
+```
+
+Rules:
+- Callback function parameters (`x`, `y`, `key`) have **Trust 30** and **Tainted Trait** (untrusted input from the user's meat fingers).
+- If the canvas is **Afraid** (from a bonded error), click/key handlers are **disabled for 50 statements**. Mouse events still fire.
+- Handler functions follow all normal function rules: call counting, Tired Trait at 50+ calls, Resentful at 100+ calls. This means a click handler called 100+ times has a 5% chance of returning Void per click. Plan accordingly.
+- If the `key` Word has Angry Mood (user mashing keyboard sends angry-seeming input), the key's value may be ALL CAPS regardless of actual case.
+
+### Sprites
+
+```
+sure player = screen.sprite("hero.png", 100, 200).
+player.x = 150.
+player.y = 250.
+player.show().   // Renders the sprite on the canvas.
+```
+
+Sprites are **Personality instances**:
+- They have Moods, Traits, Trust, their own SP.
+- They participate in the Relationship Graph.
+- A sprite loaded from a file forms an Emotional Bond with the file handle that loaded the image.
+- Sprites with the **Tired Trait** move 10% slower in animations (position updates are multiplied by 0.9).
+- Sprites can form **Emotional Bonds** with other sprites if created within 3 lines. Bonded sprites maintain their relative distance — moving one moves the other to preserve the offset.
+
+```
+sure player = screen.sprite("hero.png", 100, 200).
+sure pet = screen.sprite("cat.png", 120, 200).     // Bonded! Offset: (20, 0)
+
+player.x = 300.  // pet.x automatically becomes 320. That's the deal.
+```
+
+Sprites with the **Afraid** Mood render with slight jitter (±1px per frame).
+
+### Game Loop
+
+```
+screen.every(16, does () {
+   // Called approximately every 16ms (~60fps).
+   screen.clear().
+   updateGameState().
+   drawEverything().
+   screen.show().
+}).
+```
+
+The `ms` timing is affected by program SP jitter (same as `Time.wait` — lower SP = more frame timing jitter). At SP < 20, frame timing can vary by ±50%, making the game feel "drunk."
+
+The callback follows all function call counting rules. After 50 calls (50 frames), the callback gains Tired Trait. After 100 calls, it's Resentful. This means a game loop will start glitching after ~100 frames unless you account for it.
+
+To reset a function's call count:
+
+```
+forget calls on myCallback.  // Resets call counter to 0. Costs -5 SP.
+```
+
+### Canvas State
+
+```
+screen.save("screenshot.png").   // Saves to file. Creates a file handle bonded with the canvas.
+screen.clear().                   // Clears the canvas. All pixel data goes to the Afterlife.
+
+// Restore a cleared canvas:
+sure oldState = séance("screen").  // Gets the last canvas state from the Afterlife.
+screen.restore(oldState).          // Restores it. Costs -5 SP for the séance.
+```
+
+### Canvas and `no` Bans
+
+`no graphics.` disables the entire §31. Any canvas operations become compile errors.
+
+A program with `no graphics` that tries to `open` a `.png` file:
+```
+[SanityLang] You banned graphics but you're opening a .png? What are you doing with it? (-3 SP, suspicion)
+```
 
 ---
 
@@ -967,6 +1434,8 @@ pray for nothing.    // No effect. +1 SP for the gesture.
 | `.san.dream` | Dream variable persistence |
 | `.san.blame` | Blame and error logs |
 | `.san.therapy` | Therapy session logs |
+| `.san.backup` | Automatic backup from low-Trust file writes (see §30) |
+| `.san.canvas` | Canvas state persistence for séance restoration (see §31) |
 | `mercy.san` | Place in directory to kill `forever` loops |
 
 ---
@@ -982,4 +1451,13 @@ pray for nothing.    // No effect. +1 SP for the gesture.
 | `--audit` | Extra SP tracking, report at end. |
 | `--pray` | Equivalent to `pray for mercy` globally. |
 | `--i-know-what-im-doing` | Required to compile `.insanity` files. |
+| `--headless` | Disables canvas window. All draw calls render to buffer only. `show()` is a no-op. |
+| `--no-input` | All `ask` calls return `Dunno`. `listen` returns empty List. |
+| `--trust-all` | All input (args, ask, files, keys) starts with Trust 100. You're living dangerously. |
 | `--target <t>` | Compilation target: `native`, `js`, `python`, `c`, `english`, `haiku`, `therapy`, `cursed` (outputs DreamBerd). |
+
+---
+
+## Appendix C: If You're Struggling
+
+If this is too complicated for you, just go and use brainfuck instead.

@@ -198,11 +198,51 @@ def _install_statement_executors():
 
         return new_value
 
+    def _apply_output_terminators(self, node: Statement, text: str) -> tuple[str, bool]:
+        """Apply IO terminator effects. Returns (modified_text, should_skip).
+
+        .. → cached (don't re-print same string)
+        ~  → 15% chance of printing PREVIOUS print's content instead
+        !  → forceful, clears all Trait effects on source variable
+        ?  → debug, appends Mood/Trust/Traits
+        """
+        terms = getattr(node, 'terminators', [])
+        should_skip = False
+
+        # '..' cached — skip if already printed
+        if '..' in terms:
+            if text in self._print_cache:
+                should_skip = True
+                return text, should_skip
+            self._print_cache.add(text)
+
+        # '~' uncertain output — 15% chance of swapping with previous
+        if '~' in terms and self._last_print and random.random() < 0.15:
+            text = self._last_print
+
+        # '!' forceful — clear Traits on source variable
+        if '!' in terms and hasattr(node, 'expression') and isinstance(node.expression, VariableAccess):
+            var = self.current_env.get(node.expression.name)
+            if var:
+                var.traits.clear()
+
+        # '?' debug — append variable state
+        if '?' in terms and hasattr(node, 'expression') and isinstance(node.expression, VariableAccess):
+            var = self.current_env.get(node.expression.name)
+            if var:
+                text = f"{text} [Mood:{var.mood.name} Trust:{var.trust} Traits:{','.join(t.name for t in var.traits) or 'none'}]"
+
+        return text, should_skip
+
     def _exec_print(self, node: PrintStatement) -> SanValue:
         value = self.evaluate(node.expression)
         text = str(value)
-        self.output.append(text)
-        print(text)
+
+        text, should_skip = self._apply_output_terminators(node, text)
+        if not should_skip:
+            self.output.append(text)
+            print(text)
+            self._last_print = text
 
         # Printing makes variables Observed
         if isinstance(node.expression, VariableAccess):
@@ -1077,6 +1117,284 @@ def _install_statement_executors():
         with open(self.blame_path, "a") as f:
             f.write(f"[{datetime.datetime.now().isoformat()}] {message}\n")
 
+    # ================================================
+    # Console IO statement executors
+    # ================================================
+
+    def _exec_shout(self, node: ShoutStatement) -> SanValue:
+        """Execute shout(expr) — print ALL CAPS to stdout, -2 SP."""
+        value = self.evaluate(node.expression)
+        text = str(value).upper()
+
+        text, should_skip = self._apply_output_terminators(node, text)
+        if not should_skip:
+            self.output.append(text)
+            print(text)
+            self._last_print = text
+        self.sp.io_shout()
+        return san_void()
+
+    def _exec_whisper_stmt(self, node: WhisperStatement) -> SanValue:
+        """Execute whisper(expr) — print to stderr. ROT13 if Paranoid.
+        Mood effects: Sad → drops last char, Angry → random caps."""
+        import sys as _sys
+        import codecs
+        value = self.evaluate(node.expression)
+        text = str(value)
+
+        # Get source variable for mood/trait effects
+        var = None
+        if isinstance(node.expression, VariableAccess):
+            var = self.current_env.get(node.expression.name)
+
+        # Trait: Paranoid → ROT13 (skip if '!' terminator)
+        terms = getattr(node, 'terminators', [])
+        if '!' not in terms and var and Trait.PARANOID in var.traits:
+            text = codecs.encode(text, "rot_13")
+
+        # Mood effects (skip if '!' terminator — forceful ignores all)
+        if '!' not in terms and var:
+            if var.mood == Mood.SAD and len(text) > 1:
+                text = text[:-1]  # drops last char
+            elif var.mood == Mood.ANGRY:
+                text = ''.join(c.upper() if random.random() < 0.4 else c for c in text)
+
+        text, should_skip = self._apply_output_terminators(node, text)
+        if not should_skip:
+            self.output.append(text)
+            print(text, file=_sys.stderr)
+            self._last_print = text
+        self.sp.io_whisper()
+        return san_void()
+
+    # ================================================
+    # Filesystem IO statement executors
+    # ================================================
+
+    def _exec_open(self, node: OpenStatement) -> SanValue:
+        """Execute open "path" as name — open a file handle."""
+        from .filehandle import SanFileHandle
+
+        path_val = self.evaluate(node.path)
+        path_str = str(path_val)
+        handle_name = node.handle_name
+
+        # §30: Path interpolation trust check
+        # If path contains {var} interpolation, the var must have Trust ≥ 50
+        if isinstance(node.path, VariableAccess):
+            var = self.current_env.get(node.path.name)
+            if var and var.trust < 50:
+                self.sp._audit("path interpolation rejected")
+                self.sp.sp += self.sp._modifier(-3)
+                raise SanityError(
+                    f"Path interpolation rejected: '{node.path.name}' has Trust {var.trust}. "
+                    f"Potential path traversal. (Use cleanse() to boost Trust)")
+
+        # SP cost: -3 for opening a file
+        self.sp.file_open()
+
+        fh = SanFileHandle(path_str, handle_name)
+        try:
+            fh.open()
+        except Exception as e:
+            raise SanityError(f"Failed to open '{path_str}': {e}")
+
+        self.file_handles[handle_name] = fh
+        return san_void()
+
+    def _exec_write(self, node: WriteStatement) -> SanValue:
+        """Execute write expr to handle — overwrite file contents.
+        Terminator effects: '..' caches, '~' may not flush."""
+        from .filehandle import SanFileHandle
+
+        content = str(self.evaluate(node.content))
+        handle_name = node.handle_name
+
+        fh = self.file_handles.get(handle_name)
+        if fh is None or not isinstance(fh, SanFileHandle):
+            raise SanityError(f"No open file handle '{handle_name}'")
+        if not fh.is_open:
+            raise SanityError(f"File handle '{handle_name}' is closed")
+
+        # SP cost scales with file size
+        cost = fh.sp_cost_for_size(base_cost=3)
+        self.sp._audit(f"write to {handle_name}")
+        self.sp.sp += self.sp._modifier(-cost)
+
+        # Write terminator effects
+        terms = getattr(node, 'terminators', [])
+
+        # '..' cached — writing the same content again is a no-op
+        cache_key = f"write:{handle_name}:{content}"
+        if '..' in terms:
+            if cache_key in self._write_cache:
+                return san_void()
+            self._write_cache.add(cache_key)
+
+        # '~' uncertain write — may or may not flush
+        if '~' in terms and random.random() < 0.3:
+            return san_void()  # silently didn't write
+
+        # §30: Low-trust auto-backup
+        if fh.trust < 30:
+            backup_path = fh.path + ".san.backup"
+            try:
+                with open(backup_path, 'a') as bf:
+                    bf.write(content)
+            except Exception:
+                pass  # best-effort backup
+
+        try:
+            fh.write(content)
+        except Exception as e:
+            raise SanityError(f"Failed to write to '{handle_name}': {e}")
+
+        return san_void()
+
+    def _exec_append(self, node: AppendStatement) -> SanValue:
+        """Execute append expr to handle — append to file.
+        Terminator effects: '..' caches."""
+        from .filehandle import SanFileHandle
+
+        content = str(self.evaluate(node.content))
+        handle_name = node.handle_name
+
+        fh = self.file_handles.get(handle_name)
+        if fh is None or not isinstance(fh, SanFileHandle):
+            raise SanityError(f"No open file handle '{handle_name}'")
+        if not fh.is_open:
+            raise SanityError(f"File handle '{handle_name}' is closed")
+
+        # SP cost scales with file size
+        cost = fh.sp_cost_for_size(base_cost=2)
+        self.sp._audit(f"append to {handle_name}")
+        self.sp.sp += self.sp._modifier(-cost)
+
+        # '..' cached append — same content is a no-op
+        terms = getattr(node, 'terminators', [])
+        cache_key = f"append:{handle_name}:{content}"
+        if '..' in terms:
+            if cache_key in self._write_cache:
+                return san_void()
+            self._write_cache.add(cache_key)
+
+        # Low-trust auto-backup
+        if fh.trust < 30:
+            backup_path = fh.path + ".san.backup"
+            try:
+                with open(backup_path, 'a') as bf:
+                    bf.write(content)
+            except Exception:
+                pass
+
+        try:
+            fh.append(content)
+        except Exception as e:
+            raise SanityError(f"Failed to append to '{handle_name}': {e}")
+
+        return san_void()
+
+    def _exec_close(self, node: CloseStatement) -> SanValue:
+        """Execute close handle — close a file handle."""
+        from .filehandle import SanFileHandle
+
+        handle_name = node.handle_name
+        fh = self.file_handles.get(handle_name)
+        if fh is None or not isinstance(fh, SanFileHandle):
+            raise SanityError(f"No open file handle '{handle_name}'")
+
+        fh.close()
+        # SP cost: -1 for closing
+        self.sp.file_close()
+
+        # Remove from tracking
+        del self.file_handles[handle_name]
+        return san_void()
+
+    # ================================================
+    # Call management statement executors
+    # ================================================
+
+    def _exec_forget_calls(self, node: ForgetCallsStatement) -> SanValue:
+        """Execute forget calls on funcName — reset call counter. -5 SP."""
+        fname = node.function_name
+        if fname in self.call_counts:
+            self.call_counts[fname] = 0
+        # Also clear memoization cache if any
+        if fname in self.memo_caches:
+            self.memo_caches[fname].clear()
+        self.sp.forget_calls_cost()
+        return san_void()
+
+    # ================================================
+    # Args / Flags population (§29)
+    # ================================================
+
+    def _populate_args_and_flags(self) -> SanValue:
+        """Populate built-in args and flags variables from self.program_args."""
+        import sys
+
+        raw_args = self.program_args if self.program_args else []
+
+        # Build args list — each arg is a Word with Trust 30, Tainted, Doubt 3
+        arg_values = [san_word(a) for a in raw_args]
+        args_val = san_list(arg_values)
+
+        args_var = Variable(
+            name="args",
+            value=args_val,
+            keyword="sure",
+        )
+        args_var.trust = 30
+        args_var.doubt = 3
+        args_var.traits = {Trait.TAINTED}
+        self.global_env.define("args", args_var)
+
+        # Parse flags from args: --key=value, --key value, -k value
+        flags_dict: dict[str, SanValue] = {}
+        i = 0
+        while i < len(raw_args):
+            arg = raw_args[i]
+            if arg.startswith("--"):
+                if "=" in arg:
+                    key, val = arg[2:].split("=", 1)
+                    flags_dict[key] = san_word(val)
+                elif i + 1 < len(raw_args) and not raw_args[i + 1].startswith("-"):
+                    flags_dict[arg[2:]] = san_word(raw_args[i + 1])
+                    i += 1
+                else:
+                    flags_dict[arg[2:]] = san_yep()
+            elif arg.startswith("-") and len(arg) == 2:
+                if i + 1 < len(raw_args) and not raw_args[i + 1].startswith("-"):
+                    flags_dict[arg[1:]] = san_word(raw_args[i + 1])
+                    i += 1
+                else:
+                    flags_dict[arg[1:]] = san_yep()
+            i += 1
+
+        flags_val = san_blob(flags_dict)
+        flags_var = Variable(
+            name="flags",
+            value=flags_val,
+            keyword="sure",
+        )
+        flags_var.trust = 30
+        flags_var.doubt = 3
+        flags_var.traits = {Trait.TAINTED}
+        self.global_env.define("flags", flags_var)
+
+        # Handle special flags
+        if "chaos" in flags_dict:
+            self.sp.sp = 50  # §29: "Program starts at 50 SP instead of 100"
+        if "mercy" in flags_dict:
+            self.sp.pray_mercy = True
+        if "trust-me" in flags_dict or "trust_me" in flags_dict:
+            # §29: args and flags start with Trust 70 instead of 30
+            args_var.trust = 70
+            flags_var.trust = 70
+
+        return san_void()
+
     # Install all methods
     methods = {
         '_exec_var_decl': _exec_var_decl,
@@ -1127,7 +1445,18 @@ def _install_statement_executors():
         '_load_dreams': _load_dreams,
         '_save_dreams': _save_dreams,
         '_write_blame': _write_blame,
+        # IO / Filesystem / Call management
+        '_exec_shout': _exec_shout,
+        '_exec_whisper_stmt': _exec_whisper_stmt,
+        '_exec_open': _exec_open,
+        '_exec_write': _exec_write,
+        '_exec_append': _exec_append,
+        '_exec_close': _exec_close,
+        '_exec_forget_calls': _exec_forget_calls,
+        '_populate_args_and_flags': _populate_args_and_flags,
+        '_apply_output_terminators': _apply_output_terminators,
     }
+
     for name, method in methods.items():
         setattr(Interpreter, name, method)
 

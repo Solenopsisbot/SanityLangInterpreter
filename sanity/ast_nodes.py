@@ -550,3 +550,82 @@ class ForgetsEveryone(Statement):
 @dataclass
 class DeleteStatement(Statement):
     variable: str = ""
+
+
+# --- Console IO ---
+
+@dataclass
+class AskExpr(Expression):
+    """ask("prompt") — read a line from stdin."""
+    prompt: Expression = field(default_factory=Expression)
+
+
+@dataclass
+class ListenExpr(Expression):
+    """listen() — read all stdin lines."""
+    pass
+
+
+@dataclass
+class ShoutStatement(Statement):
+    """shout(expr) — print ALL CAPS to stdout, -2 SP."""
+    expression: Expression = field(default_factory=Expression)
+
+
+@dataclass
+class WhisperStatement(Statement):
+    """whisper(expr) — print to stderr. ROT13 if Paranoid."""
+    expression: Expression = field(default_factory=Expression)
+
+
+# --- Filesystem IO ---
+
+@dataclass
+class OpenStatement(Statement):
+    """open "path" as name."""
+    path: Expression = field(default_factory=Expression)
+    handle_name: str = ""
+
+
+@dataclass
+class ReadExpr(Expression):
+    """read handle — returns file content as Word."""
+    handle_name: str = ""
+
+
+@dataclass
+class WriteStatement(Statement):
+    """write expr to handle."""
+    content: Expression = field(default_factory=Expression)
+    handle_name: str = ""
+
+
+@dataclass
+class AppendStatement(Statement):
+    """append expr to handle."""
+    content: Expression = field(default_factory=Expression)
+    handle_name: str = ""
+
+
+@dataclass
+class CloseStatement(Statement):
+    """close handle."""
+    handle_name: str = ""
+
+
+# --- Graphics ---
+
+@dataclass
+class CanvasExpr(Expression):
+    """canvas("title", width, height) — creates a canvas."""
+    title: Expression = field(default_factory=Expression)
+    width: Expression = field(default_factory=Expression)
+    height: Expression = field(default_factory=Expression)
+
+
+# --- Call Management ---
+
+@dataclass
+class ForgetCallsStatement(Statement):
+    """forget calls on func — resets call counter."""
+    function_name: str = ""

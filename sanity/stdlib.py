@@ -6,13 +6,14 @@ of signature (interpreter, args: list[SanValue]) -> SanValue.
 from __future__ import annotations
 
 import math
+import os
 import random
 import time as _time
 from typing import TYPE_CHECKING, Any, Callable
 
 from .types import (
     SanValue, SanType,
-    san_number, san_word, san_yep, san_nope, san_void, san_list,
+    san_number, san_word, san_yep, san_nope, san_void, san_list, san_blob,
 )
 from .variables import Mood, Trait
 
@@ -531,6 +532,146 @@ FATE_MODULE: dict[str, ModuleFunc] = {
 
 
 # ===================================================================
+# IO Module (§28)
+# ===================================================================
+
+def _io_buffer(interp: Interpreter, args: list[SanValue]) -> SanValue:
+    """buffer(expr) — stores output without printing. Returns the buffered Word."""
+    if not args:
+        return san_void()
+    text = str(args[0])
+    if not hasattr(interp, '_io_buffer'):
+        interp._io_buffer = []  # type: ignore
+    interp._io_buffer.append(text)  # type: ignore
+    return san_word(text)
+
+
+def _io_flush(interp: Interpreter, args: list[SanValue]) -> SanValue:
+    """flush() — prints all buffered output and clears the buffer."""
+    if not hasattr(interp, '_io_buffer'):
+        return san_void()
+    for text in interp._io_buffer:  # type: ignore
+        interp.output.append(text)
+        print(text)
+    interp._io_buffer = []  # type: ignore
+    return san_number(len(interp._io_buffer))  # type: ignore
+
+
+def _io_silence(interp: Interpreter, args: list[SanValue]) -> SanValue:
+    """silence() — clears the buffer without printing. Returns count of silenced items."""
+    if not hasattr(interp, '_io_buffer'):
+        return san_number(0)
+    count = len(interp._io_buffer)  # type: ignore
+    interp._io_buffer = []  # type: ignore
+    return san_number(count)
+
+
+IO_MODULE: dict[str, ModuleFunc] = {
+    "buffer": _io_buffer,
+    "flush": _io_flush,
+    "silence": _io_silence,
+}
+
+
+# ===================================================================
+# Files Module (§30)
+# ===================================================================
+
+def _files_temp(interp: Interpreter, args: list[SanValue]) -> SanValue:
+    """temp() — returns a temporary file path as a Word."""
+    import tempfile
+    fd, path = tempfile.mkstemp(suffix=".san.tmp")
+    os.close(fd)
+    return san_word(path)
+
+
+def _files_cwd(interp: Interpreter, args: list[SanValue]) -> SanValue:
+    """cwd() — returns the current working directory as a Word."""
+    return san_word(os.getcwd())
+
+
+def _files_list_dir(interp: Interpreter, args: list[SanValue]) -> SanValue:
+    """list_dir(path) — returns a List of Blobs with name and kind."""
+    if not args:
+        return san_list([])
+    path = str(args[0])
+    try:
+        entries = []
+        for entry in os.scandir(path):
+            kind = "dir" if entry.is_dir() else "file"
+            blob = san_blob({"name": san_word(entry.name), "kind": san_word(kind)})
+            entries.append(blob)
+        return san_list(entries)
+    except OSError:
+        return san_list([])
+
+
+def _files_exists(interp: Interpreter, args: list[SanValue]) -> SanValue:
+    """exists(path) — returns Yep or Nope."""
+    if not args:
+        return san_nope()
+    path = str(args[0])
+    return san_yep() if os.path.exists(path) else san_nope()
+
+
+FILES_MODULE: dict[str, ModuleFunc] = {
+    "temp": _files_temp,
+    "cwd": _files_cwd,
+    "list_dir": _files_list_dir,
+    "exists": _files_exists,
+}
+
+
+# ===================================================================
+# Args Module (§29)
+# ===================================================================
+
+def _args_env(interp: Interpreter, args: list[SanValue]) -> SanValue:
+    """env(name) — returns environment variable value or Void."""
+    if not args:
+        return san_void()
+    name = str(args[0])
+    val = os.environ.get(name)
+    if val is None:
+        return san_void()
+    return san_word(val)
+
+
+def _args_count(interp: Interpreter, args: list[SanValue]) -> SanValue:
+    """count() — returns the number of command-line arguments."""
+    arg_var = interp.current_env.get("args")
+    if arg_var and arg_var.value.type == SanType.LIST:
+        return san_number(len(arg_var.value.value))
+    return san_number(0)
+
+
+ARGS_MODULE: dict[str, ModuleFunc] = {
+    "env": _args_env,
+    "count": _args_count,
+}
+
+
+# ===================================================================
+# Canvas Module (§31) — stubs for headless mode
+# ===================================================================
+
+def _canvas_screenshot(interp: Interpreter, args: list[SanValue]) -> SanValue:
+    """screenshot(canvas, path) — stub, returns Void in headless mode."""
+    return san_void()
+
+
+def _canvas_fps(interp: Interpreter, args: list[SanValue]) -> SanValue:
+    """fps() — returns 0 in headless mode (no rendering)."""
+    return san_number(0)
+
+
+CANVAS_MODULE: dict[str, ModuleFunc] = {
+    "screenshot": _canvas_screenshot,
+    "fps": _canvas_fps,
+}
+
+
+# ===================================================================
 # Module Registry
 # ===================================================================
 
@@ -543,6 +684,10 @@ STDLIB_MODULES: dict[str, dict[str, ModuleFunc]] = {
     "Chaos": CHAOS_MODULE,
     "Zen": ZEN_MODULE,
     "Fate": FATE_MODULE,
+    "IO": IO_MODULE,
+    "Files": FILES_MODULE,
+    "Args": ARGS_MODULE,
+    "Canvas": CANVAS_MODULE,
 }
 
 

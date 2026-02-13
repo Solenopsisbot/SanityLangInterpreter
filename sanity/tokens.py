@@ -204,6 +204,29 @@ class TokenType(Enum):
     # === Sanity Namespace ===
     SANITY = auto()
 
+    # === Console IO ===
+    ASK = auto()
+    LISTEN = auto()
+    SHOUT = auto()
+    # WHISPER already exists as a declaration keyword; reused for whisper(...) calls
+    # PRINT already exists; reused for print(...) calls
+
+    # === Filesystem IO ===
+    OPEN = auto()
+    READ_KW = auto()     # 'read' keyword (distinct from identifier)
+    WRITE_KW = auto()    # 'write' keyword
+    APPEND_KW = auto()   # 'append' keyword
+    CLOSE = auto()
+    TO = auto()           # 'to' keyword for 'write X to handle'
+
+    # === Graphics ===
+    CANVAS = auto()
+
+    # === Call management ===
+    FORGET = auto()
+    CALLS = auto()
+    ON = auto()
+
     # === Special ===
     EOF = auto()
     NEWLINE = auto()
@@ -380,4 +403,25 @@ KEYWORDS: dict[str, TokenType] = {
 
     # Sanity namespace
     "sanity": TokenType.SANITY,
+
+    # Console IO
+    "ask": TokenType.ASK,
+    "listen": TokenType.LISTEN,
+    "shout": TokenType.SHOUT,
+
+    # Filesystem IO
+    "open": TokenType.OPEN,
+    "read": TokenType.READ_KW,
+    "write": TokenType.WRITE_KW,
+    "append": TokenType.APPEND_KW,
+    "close": TokenType.CLOSE,
+    "to": TokenType.TO,
+
+    # Graphics
+    "canvas": TokenType.CANVAS,
+
+    # Call management
+    "forget": TokenType.FORGET,
+    "calls": TokenType.CALLS,
+    "on": TokenType.ON,
 }

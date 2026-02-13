@@ -43,7 +43,13 @@ def main():
     parser.add_argument("--i-know-what-im-doing", action="store_true",
                         help="Required to run .insanity files")
     parser.add_argument("--repl", action="store_true", help="Force REPL mode")
+    parser.add_argument("--headless", action="store_true", help="Disable canvas window")
+    parser.add_argument("--no-input", action="store_true", help="All ask returns Dunno, listen returns empty")
+    parser.add_argument("--trust-all", action="store_true", help="All input starts with Trust 100")
+    parser.add_argument("--target", type=str, default=None,
+                        help="Compilation target: native, js, python, c, english, haiku, therapy, cursed")
     parser.add_argument("--version", action="version", version="(In)SanityLang v0.1-confused")
+    parser.add_argument("program_args", nargs="*", help="Arguments passed to the SanityLang program")
 
     args = parser.parse_args()
 
@@ -60,15 +66,21 @@ def main():
         "no_mood": args.no_mood,
         "pray": args.pray,
         "audit": args.audit,
+        "headless": args.headless,
+        "no_input": args.no_input,
+        "trust_all": args.trust_all,
+        "target": args.target,
     }
 
+    program_args = args.program_args or []
+
     if args.file and not args.repl:
-        run_file(args.file, flags)
+        run_file(args.file, flags, program_args)
     else:
         run_repl(flags)
 
 
-def run_file(path: str, flags: dict):
+def run_file(path: str, flags: dict, program_args: list[str] | None = None):
     """Execute a .san file."""
     try:
         with open(path, "r") as f:
@@ -77,7 +89,7 @@ def run_file(path: str, flags: dict):
         print(f"[SanityLang] File not found: {path}")
         sys.exit(1)
 
-    interp = Interpreter(source_path=path, flags=flags)
+    interp = Interpreter(source_path=path, flags=flags, program_args=program_args)
     try:
         interp.run(source)
     except SanityError as e:

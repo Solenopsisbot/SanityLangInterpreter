@@ -3823,11 +3823,11 @@ class TestMultiFeaturePrograms:
     def test_string_processing_pipeline(self):
         """String concat + function calls + conditionals."""
         out = output_of(
-            'does shout(msg) {\n'
+            'does yell(msg) {\n'
             '    return Words.upper(msg).\n'
             '}\n'
             'sure greeting = "hello".\n'
-            'sure result = shout(greeting).\n'
+            'sure result = yell(greeting).\n'
             'print(result).\n'
             'sure length = Words.length(greeting).\n'
             'if length == 5 {\n'

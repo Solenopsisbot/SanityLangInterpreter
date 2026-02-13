@@ -300,6 +300,63 @@ class SanityTracker:
         self.sp += self._modifier(-10)
 
     # ============================================
+    # IO / Filesystem / Graphics  (§28-§31)
+    # ============================================
+
+    def io_shout(self):
+        """shout() statement: -2 SP."""
+        self._audit("shout()")
+        self.sp += self._modifier(-2)
+
+    def io_whisper(self):
+        """whisper() statement: -1 SP."""
+        self._audit("whisper()")
+        self.sp += self._modifier(-1)
+
+    def io_ask(self):
+        """ask() expression: -1 SP."""
+        self._audit("ask()")
+        self.sp += self._modifier(-1)
+
+    def file_open(self):
+        """Opening a file handle: -3 SP."""
+        self._audit("open file")
+        self.sp += self._modifier(-3)
+
+    def file_close(self):
+        """Closing a file handle: -1 SP."""
+        self._audit("close file")
+        self.sp += self._modifier(-1)
+
+    def file_unclosed_penalty(self):
+        """Unclosed file handle at scope exit: -5 SP."""
+        self._audit("unclosed file handle penalty")
+        self.sp += self._modifier(-5)
+
+    def file_read_cost(self, size_bytes: int):
+        """Reading a file: -0.5 SP per MB (rounded up, min -1)."""
+        import math
+        mb = size_bytes / (1024 * 1024)
+        cost = max(1, math.ceil(mb * 0.5))
+        self._audit(f"file read ({size_bytes} bytes)")
+        self.sp += self._modifier(-cost)
+
+    def forget_calls_cost(self):
+        """forget calls on function: -5 SP."""
+        self._audit("forget calls")
+        self.sp += self._modifier(-5)
+
+    def canvas_create(self):
+        """Creating a canvas: -3 SP."""
+        self._audit("canvas creation")
+        self.sp += self._modifier(-3)
+
+    def canvas_sp_zero(self):
+        """Canvas SP hitting 0 — program pays -10 SP."""
+        self._audit("canvas entered Visual Insanity Mode")
+        self.sp += self._modifier(-10)
+
+    # ============================================
     # Audit Report
     # ============================================
 

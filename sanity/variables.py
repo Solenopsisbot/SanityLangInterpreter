@@ -16,6 +16,7 @@ class Mood(Enum):
     AFRAID = "Afraid"
     EXCITED = "Excited"
     JEALOUS = "Jealous"
+    OVERWHELMED = "Overwhelmed"
 
 
 class Trait(Enum):
@@ -30,6 +31,9 @@ class Trait(Enum):
     CURSED = "Cursed"
     BLESSED = "Blessed"
     VOLATILE = "Volatile"
+    ATTENTIVE = "Attentive"
+    TAINTED = "Tainted"
+    CREATIVE = "Creative"
 
 
 @dataclass
